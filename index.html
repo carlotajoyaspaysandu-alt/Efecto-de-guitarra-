@@ -49,7 +49,6 @@
       background: #161616;
     }
 
-    /* Contenedor de pedales (Scroll horizontal en celular) */
     .pedalboard {
       display: flex;
       gap: 15px;
@@ -75,14 +74,12 @@
       position: relative;
     }
 
-    /* Marco de selección para flechas del teclado */
     .pedal.selected {
       border-color: var(--focus);
       box-shadow: 0 0 18px rgba(0, 255, 204, 0.3);
       transform: translateY(-5px);
     }
-
-    .pedal-header {
+        .pedal-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
@@ -104,7 +101,6 @@
       box-shadow: 0 0 12px #ff2a2a;
     }
 
-    /* Colores distintivos por pedal */
     .pedal[data-fx="wah"] { background: linear-gradient(180deg, #2b2d42, #1a1b26); }
     .pedal[data-fx="drive"] { background: linear-gradient(180deg, #6a040f, #370617); }
     .pedal[data-fx="chorus"] { background: linear-gradient(180deg, #005f73, #001219); }
@@ -115,7 +111,6 @@
       display: flex;
       flex-direction: column;
       gap: 14px;
-      my: auto;
     }
     .control-group {
       display: flex;
@@ -129,7 +124,6 @@
       height: 24px;
     }
 
-    /* Botón pisable (Footswitch) */
     .footswitch {
       background: #d9d9d9;
       color: #111;
@@ -142,7 +136,6 @@
       font-size: 0.7rem;
       cursor: pointer;
       box-shadow: 0 6px 0 #555, 0 10px 15px rgba(0,0,0,0.6);
-      active: transform: translateY(4px);
     }
     .footswitch:active {
       transform: translateY(4px);
@@ -198,8 +191,7 @@
       </div>
       <button class="footswitch" onclick="togglePedal(1)">PISAR</button>
     </div>
-
-    <!-- 3. CHORUS -->
+        <!-- 3. CHORUS -->
     <div class="pedal" data-fx="chorus" data-index="2">
       <div class="pedal-header">
         <span class="pedal-title">Chorus</span>
@@ -245,4 +237,233 @@
       </div>
       <div class="controls">
         <div class="control-group">
-          <label>Tiempo (
+          <label>Tiempo (Segundos)</label>
+          <input type="range" id="delay-time" min="0.05" max="1.0" step="0.05" value="0.35">
+        </div>
+        <div class="control-group">
+          <label>Repeticiones (Feedback)</label>
+          <input type="range" id="delay-feedback" min="0" max="0.85" step="0.05" value="0.45">
+        </div>
+      </div>
+      <button class="footswitch" onclick="togglePedal(4)">PISAR</button>
+    </div>
+  </div>
+  <script>
+  let audioCtx;
+  let isAudioRunning = false;
+  let selectedIndex = 0;
+  const pedalsDOM = document.querySelectorAll('.pedal');
+  const pedalStates = [false, false, false, false, false];
+  const nodes = {};
+
+  document.getElementById('power-btn').addEventListener('click', async () => {
+    if (!isAudioRunning) {
+      await initAudio();
+      document.getElementById('power-btn').textContent = 'AUDIO ACTIVO';
+      document.getElementById('power-btn').classList.add('active');
+      isAudioRunning = true;
+    }
+  });
+
+  async function initAudio() {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)({
+      latencyHint: 'interactive'
+    });
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false,
+        autoGainControl: false,
+        noiseSuppression: false,
+        latency: 0
+      }
+    });
+
+    const input = audioCtx.createMediaStreamSource(stream);
+
+    // 1. WAH
+    nodes.wahDry = audioCtx.createGain();
+    nodes.wahWet = audioCtx.createGain();
+    nodes.wahFilter = audioCtx.createBiquadFilter();
+    nodes.wahFilter.type = 'bandpass';
+    nodes.wahFilter.frequency.value = 800;
+    nodes.wahFilter.Q.value = 8;
+    const wahLFO = audioCtx.createOscillator();
+    const wahLFOGain = audioCtx.createGain();
+    wahLFO.frequency.value = 2.5;
+    wahLFOGain.gain.value = 600;
+    wahLFO.connect(wahLFOGain);
+    wahLFOGain.connect(nodes.wahFilter.frequency);
+    wahLFO.start();
+    nodes.wahLFO = wahLFO;
+    nodes.wahDry.gain.value = 1;
+    nodes.wahWet.gain.value = 0;
+
+    // 2. DRIVE
+    nodes.driveDry = audioCtx.createGain();
+    nodes.driveWet = audioCtx.createGain();
+    nodes.shaper = audioCtx.createWaveShaper();
+    nodes.driveOut = audioCtx.createGain();
+    nodes.shaper.curve = makeDistortionCurve(120);
+    nodes.shaper.oversample = '4x';
+    nodes.driveOut.gain.value = 0.7;
+    nodes.driveDry.gain.value = 1;
+    nodes.driveWet.gain.value = 0;
+
+    // 3. CHORUS
+    nodes.chorusDry = audioCtx.createGain();
+    nodes.chorusWet = audioCtx.createGain();
+    const chorusDelay = audioCtx.createDelay();
+    chorusDelay.delayTime.value = 0.025;
+    const chorusLFO = audioCtx.createOscillator();
+    const chorusLFOGain = audioCtx.createGain();
+    chorusLFO.frequency.value = 1.5;
+    chorusLFOGain.gain.value = 0.004;
+    chorusLFO.connect(chorusLFOGain);
+    chorusLFOGain.connect(chorusDelay.delayTime);
+    chorusLFO.start();
+    nodes.chorusLFO = chorusLFO;
+    nodes.chorusWetLevel = 0.5;
+    nodes.chorusDry.gain.value = 1;
+    nodes.chorusWet.gain.value = 0;
+
+    // 4. PSICODÉLICO
+    nodes.psychoDry = audioCtx.createGain();
+    nodes.psychoWet = audioCtx.createGain();
+    const allpass1 = audioCtx.createBiquadFilter();
+    const allpass2 = audioCtx.createBiquadFilter();
+    allpass1.type = 'allpass';
+    allpass2.type = 'allpass';
+    const psychoFeedback = audioCtx.createGain();
+    psychoFeedback.gain.value = 0.7;
+    const psychoLFO = audioCtx.createOscillator();
+    const psychoLFOGain = audioCtx.createGain();
+    psychoLFO.frequency.value = 0.6;
+    psychoLFOGain.gain.value = 1200;
+    psychoLFO.connect(psychoLFOGain);
+    psychoLFOGain.connect(allpass1.frequency);
+    psychoLFOGain.connect(allpass2.frequency);
+    psychoLFO.start();
+    nodes.psychoLFO = psychoLFO;
+    nodes.psychoFeedback = psychoFeedback;
+    nodes.psychoDry.gain.value = 1;
+    nodes.psychoWet.gain.value = 0;
+
+    // 5. DELAY
+    nodes.delayDry = audioCtx.createGain();
+    nodes.delayWet = audioCtx.createGain();
+    nodes.delayNode = audioCtx.createDelay(2.0);
+    nodes.delayNode.delayTime.value = 0.35;
+    nodes.delayFeedback = audioCtx.createGain();
+    nodes.delayFeedback.gain.value = 0.45;
+    nodes.delayDry.gain.value = 1;
+    nodes.delayWet.gain.value = 0;
+        // CONEXIÓN EN SERIE
+    const stage1Out = audioCtx.createGain();
+    input.connect(nodes.wahDry).connect(stage1Out);
+    input.connect(nodes.wahFilter).connect(nodes.wahWet).connect(stage1Out);
+
+    const stage2Out = audioCtx.createGain();
+    stage1Out.connect(nodes.driveDry).connect(stage2Out);
+    stage1Out.connect(nodes.shaper).connect(nodes.driveOut).connect(nodes.driveWet).connect(stage2Out);
+
+    const stage3Out = audioCtx.createGain();
+    stage2Out.connect(nodes.chorusDry).connect(stage3Out);
+    stage2Out.connect(chorusDelay).connect(nodes.chorusWet).connect(stage3Out);
+
+    const stage4Out = audioCtx.createGain();
+    stage3Out.connect(nodes.psychoDry).connect(stage4Out);
+    stage3Out.connect(allpass1).connect(allpass2);
+    allpass2.connect(psychoFeedback).connect(allpass1);
+    allpass2.connect(nodes.psychoWet).connect(stage4Out);
+
+    stage4Out.connect(nodes.delayDry).connect(audioCtx.destination);
+    stage4Out.connect(nodes.delayNode);
+    nodes.delayNode.connect(nodes.delayFeedback).connect(nodes.delayNode);
+    nodes.delayNode.connect(nodes.delayWet).connect(audioCtx.destination);
+
+    bindSliders();
+  }
+
+  function makeDistortionCurve(amount) {
+    const k = typeof amount === 'number' ? amount : 50;
+    const n_samples = 44100;
+    const curve = new Float32Array(n_samples);
+    const deg = Math.PI / 180;
+    for (let i = 0; i < n_samples; ++i) {
+      const x = (i * 2) / n_samples - 1;
+      curve[i] = ((3 + k) * x * 20 * deg) / (Math.PI + k * Math.abs(x));
+    }
+    return curve;
+  }
+
+  function togglePedal(index) {
+    selectedIndex = index;
+    updateSelectionUI();
+    pedalStates[index] = !pedalStates[index];
+    const isOn = pedalStates[index];
+    pedalsDOM[index].classList.toggle('on', isOn);
+    if (!isAudioRunning) return;
+
+    switch (index) {
+      case 0:
+        nodes.wahDry.gain.value = isOn ? 0.2 : 1;
+        nodes.wahWet.gain.value = isOn ? 1.5 : 0;
+        break;
+      case 1:
+        nodes.driveDry.gain.value = isOn ? 0 : 1;
+        nodes.driveWet.gain.value = isOn ? 1 : 0;
+        break;
+      case 2:
+        nodes.chorusWet.gain.value = isOn ? nodes.chorusWetLevel : 0;
+        break;
+      case 3:
+        nodes.psychoDry.gain.value = isOn ? 0.6 : 1;
+        nodes.psychoWet.gain.value = isOn ? 0.9 : 0;
+        break;
+      case 4:
+        nodes.delayWet.gain.value = isOn ? 0.6 : 0;
+        break;
+    }
+  }
+
+  function bindSliders() {
+    document.getElementById('wah-rate').oninput = e => nodes.wahLFO.frequency.value = e.target.value;
+    document.getElementById('wah-depth').oninput = e => nodes.wahFilter.Q.value = e.target.value;
+    document.getElementById('drive-gain').oninput = e => nodes.shaper.curve = makeDistortionCurve(Number(e.target.value));
+    document.getElementById('drive-level').oninput = e => nodes.driveOut.gain.value = e.target.value;
+    document.getElementById('chorus-rate').oninput = e => nodes.chorusLFO.frequency.value = e.target.value;
+    document.getElementById('chorus-mix').oninput = e => {
+      nodes.chorusWetLevel = Number(e.target.value);
+      if (pedalStates[2]) nodes.chorusWet.gain.value = nodes.chorusWetLevel;
+    };
+    document.getElementById('psycho-rate').oninput = e => nodes.psychoLFO.frequency.value = e.target.value;
+    document.getElementById('psycho-feedback').oninput = e => nodes.psychoFeedback.gain.value = e.target.value;
+    document.getElementById('delay-time').oninput = e => nodes.delayNode.delayTime.value = e.target.value;
+    document.getElementById('delay-feedback').oninput = e => nodes.delayFeedback.gain.value = e.target.value;
+  }
+
+  function updateSelectionUI() {
+    pedalsDOM.forEach((p, idx) => {
+      p.classList.toggle('selected', idx === selectedIndex);
+    });
+    pedalsDOM[selectedIndex].scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'ArrowRight') {
+      e.preventDefault();
+      selectedIndex = (selectedIndex + 1) % pedalsDOM.length;
+      updateSelectionUI();
+    } else if (e.code === 'ArrowLeft') {
+      e.preventDefault();
+      selectedIndex = (selectedIndex - 1 + pedalsDOM.length) % pedalsDOM.length;
+      updateSelectionUI();
+    } else if (e.code === 'Space') {
+      e.preventDefault();
+      togglePedal(selectedIndex);
+    }
+  });
+</script>
+</body>
+</html>
